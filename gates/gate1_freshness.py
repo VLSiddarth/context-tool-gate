@@ -1,4 +1,12 @@
-"""Gate 1: Source Freshness — deterministic context decay scoring."""
+"""Gate 1: Source Freshness — deterministic context decay scoring.
+
+This module uses KU‑Gateway's internal evaluation engine to:
+1. Extract <context> blocks from messages
+2. Score them via the Knowledge Universe API
+3. Drop any chunk above the decay threshold
+4. Reconstruct clean messages
+5. Return a structured context_manifest for Gate 2 (evidence contract)
+"""
 
 import asyncio
 from typing import List, Dict, Any, Tuple, Optional
@@ -8,8 +16,8 @@ from ku_gateway.stripper import Stripper
 from ku_gateway.models import ContextChunk
 from ku_gateway.config import Settings
 from ku_gateway.utils import extract_context_chunks
+from ku_gateway.telemetry import logger   # reuse the gateway's logger
 
-# Default settings from environment (used if no override)
 settings = Settings()
 
 
@@ -43,11 +51,21 @@ async def evaluate_freshness(
 
     evaluator = Evaluator()
     stripper = Stripper()
-    # Override the stripper's threshold for this run
     stripper.threshold = effective_threshold
 
     results = await evaluator.evaluate_chunks(chunks)
-    fresh_chunks, fresh_results, blocked_chunks = stripper.filter_chunks(chunks, results)
+
+    # ----- Detect and warn about fallback scores -----
+    for r in results:
+        if r.decay_score == 0.5 and r.confidence == 0.0:
+            logger.warning(
+                f"Chunk {r.chunk_id} scored 0.50 (confidence 0.0) – likely fallback. "
+                "KU API may be unreachable."
+            )
+
+    fresh_chunks, fresh_results, blocked_chunks = stripper.filter_chunks(
+        chunks, results
+    )
 
     manifest = {
         "chunks": [],
@@ -79,6 +97,9 @@ async def evaluate_freshness(
             "reason": reason,
         })
 
-    clean_messages = stripper.reconstruct_messages(messages, fresh_chunks, chunks)
+    clean_messages = stripper.reconstruct_messages(
+        messages, fresh_chunks, chunks
+    )
+
     await evaluator.close()
     return clean_messages, manifest

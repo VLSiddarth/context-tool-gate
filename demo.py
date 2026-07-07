@@ -17,6 +17,7 @@ try:
 except ImportError:
     console = None
 
+
 def print_header(text: str):
     if hasattr(console, 'rule'):
         console.rule(f"[bold cyan]{text}[/bold cyan]")
@@ -60,17 +61,23 @@ def run_scenario(name, messages, tool_name, threshold=None):
     else:
         console.print("No context chunks found.")
 
-    # Build tool call using first chunk's real ID
+    # Build tool call using the first chunk's real ID
     chunk_id = manifest["chunks"][0]["id"] if manifest["chunks"] else "unknown"
     tool_call = {
         "tool": tool_name,
         "evidence_ids": [chunk_id],
     }
-    # Add some dummy required fields for demo tools
     if tool_name == "deploy_service":
-        tool_call.update({"service_name": "payment-api", "version": "2.4.1", "environment": "production"})
+        tool_call.update({
+            "service_name": "payment-api",
+            "version": "2.4.1",
+            "environment": "production"
+        })
     elif tool_name == "send_email":
-        tool_call.update({"recipient": "customer@example.com", "subject": "Welcome!"})
+        tool_call.update({
+            "recipient": "customer@example.com",
+            "subject": "Welcome!"
+        })
 
     # Gate 2
     print_header("Gate 2 – Evidence Contract")
@@ -97,26 +104,28 @@ def main():
             border_style="blue"
         ))
 
-    # Scenario 1: Force stale chunk by setting threshold extremely low
+    # ── Stale scenario: real old arXiv paper (2019) ──
     run_scenario(
-        "Stale Context – Expected Gate 2 BLOCK",
+        "Stale Context – Expected Gate 2 BLOCK (real 2019 arXiv paper)",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Deploy the latest hotfix. <context>Old deployment runbook from 2019.</context>"}
+            {"role": "user", "content": "Deploy the latest hotfix. "
+                                        "<context>https://arxiv.org/abs/1906.08237</context>"}
         ],
         tool_name="deploy_service",
-        threshold=0.01   # any real decay score will exceed this
+        threshold=0.5   # rely on real decay score, not a forced low threshold
     )
 
-    # Scenario 2: Fresh context with normal threshold
+    # ── Fresh scenario: recent arXiv paper (2025) ──
     run_scenario(
         "Fresh Context – Expected ALL PASS",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
-            {"role": "user", "content": "Send a welcome email to the new customer. <context>Approved email template v3, last updated 2025-11-15.</context>"}
+            {"role": "user", "content": "Send a welcome email to the new customer. "
+                                        "<context>https://arxiv.org/abs/2501.05409</context>"}
         ],
         tool_name="send_email",
-        threshold=0.5    # default, fresh chunk kept
+        threshold=0.5
     )
 
 
