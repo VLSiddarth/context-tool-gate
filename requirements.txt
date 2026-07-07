@@ -1,0 +1,2 @@
+python-dotenv>=1.0
+ku-gateway @ git+https://github.com/VLSiddarth/KU-Gateway.git
