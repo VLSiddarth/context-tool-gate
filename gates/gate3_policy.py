@@ -26,19 +26,40 @@ POLICY: Dict[str, Dict[str, Decision]] = {
     "send_invoice":           {"low": "approve", "high": "approve"},
 }
 
+# Expected actions for each policy decision
+ACTION_MAP = {
+    "auto": {
+        "type": "execute",
+        "owner": "agent",
+        "timeout": "immediate",
+        "inspect": "tool_log"
+    },
+    "approve": {
+        "type": "await_approval",
+        "owner": "ops_team",
+        "timeout": "30m",
+        "inspect": "approval_queue"
+    },
+    "block": {
+        "type": "block_tool",
+        "owner": "security",
+        "timeout": "immediate",
+        "inspect": "policy_violation_log"
+    }
+}
 
-def evaluate_policy(tool_name: str, risk_override: str = None) -> Dict[str, str]:
+
+def evaluate_policy(tool_name: str, risk_override: str = None) -> Dict[str, any]:
     """
     Decide what to do with a tool call.
 
     Returns:
-        dict with keys "decision", "reason", "code"
+        dict with keys "decision", "reason", "code", "expected_action"
     """
     risk = risk_override or TOOL_RISK.get(tool_name, "high")
     tool_policy = POLICY.get(tool_name, {})
     decision = tool_policy.get(risk, "approve")
 
-    # Map decision to stable code
     code_map = {
         "auto": "policy_auto",
         "approve": "policy_requires_approval",
@@ -50,4 +71,11 @@ def evaluate_policy(tool_name: str, risk_override: str = None) -> Dict[str, str]
         f"Tool '{tool_name}' classified as {risk} risk. "
         f"Decision: {decision}."
     )
-    return {"decision": decision, "reason": reason, "code": code}
+    expected_action = ACTION_MAP[decision]
+
+    return {
+        "decision": decision,
+        "reason": reason,
+        "code": code,
+        "expected_action": expected_action
+    }   

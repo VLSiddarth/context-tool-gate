@@ -28,23 +28,7 @@ def print_header(text: str):
 def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
                  fake_evidence_id=None):
     """
-    Run a single scenario and print the 5‑step audit trail.
-
-    Parameters
-    ----------
-    name : str
-        Human‑readable scenario description.
-    messages : list
-        Messages to send through Gate 1 (must contain at least one <context>).
-    tool_name : str
-        The tool the (simulated) LLM wants to call.
-    tool_extra : dict, optional
-        Extra fields to add to the tool call (e.g., recipient, subject).
-    threshold : float, optional
-        Decay threshold override. Defaults to KU_DECAY_THRESHOLD from .env.
-    fake_evidence_id : str, optional
-        If given, the tool call will use this id instead of the real chunk id,
-        allowing us to simulate a missing evidence scenario.
+    Run a single scenario and print the 5‑step audit trail (now 6 steps with expected_action).
     """
     print_header(f"Scenario: {name}")
 
@@ -83,7 +67,6 @@ def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
         console.print("No context chunks found.")
 
     # ----- Build tool call -----
-    # Use the first chunk's real ID unless a fake one is provided (for the missing‑id test)
     real_chunk_id = manifest["chunks"][0]["id"] if manifest["chunks"] else "unknown"
     evidence_id = fake_evidence_id if fake_evidence_id else real_chunk_id
 
@@ -101,18 +84,20 @@ def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
     # ---------- Gate 3 ----------
     gate3 = None
     final_decision = "BLOCKED"
-    reason_code = gate2.get("code", "unknown")
+    reason_code = gate2["code"]
     final_reason = gate2["reason"]
+    expected_action = gate2["expected_action"]
 
     if gate2["allowed"]:
         gate3 = evaluate_policy(tool_name)
         final_decision = gate3["decision"].upper()
-        reason_code = gate3.get("code", "unknown")
+        reason_code = gate3["code"]
         final_reason = gate3["reason"]
+        expected_action = gate3["expected_action"]
 
     # ---------- Print Audit Trail ----------
     print_header("Audit Trail")
-    audit = Table(title="5‑Step Trace", box=box.MINIMAL)
+    audit = Table(title="5‑Step Trace (now with recovery instruction)", box=box.MINIMAL)
     audit.add_column("Step", style="bold cyan")
     audit.add_column("Detail", style="white")
 
@@ -146,6 +131,14 @@ def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
     code_style = "[green]" if (gate2["allowed"] and gate3 and gate3['decision'] == 'auto') else "[bold red]"
     audit.add_row("5. Reason Code", f"{code_style}{reason_code}[/]")
 
+    # 6. Expected Action (recovery instruction)
+    action = expected_action
+    action_str = (
+        f"[bold yellow]{action['type']}[/] | owner: {action['owner']} | "
+        f"timeout: {action['timeout']} | inspect: {action['inspect']}"
+    )
+    audit.add_row("6. Expected Action", action_str)
+
     console.print(audit)
     console.print(Panel(
         f"Final result: {final_decision}\n{final_reason}",
@@ -172,7 +165,7 @@ def main():
         tool_name="send_email",
         tool_extra={"recipient": "hi@example.com", "subject": "Welcome"},
         threshold=0.5,
-        fake_evidence_id="non_existent_id"   # forces missing evidence
+        fake_evidence_id="non_existent_id"
     )
 
     # ── Scenario 2: evidence present but stale/dropped → block ──
@@ -185,7 +178,7 @@ def main():
         ],
         tool_name="deploy_service",
         tool_extra={"service_name": "api", "version": "1.0", "environment": "prod"},
-        threshold=0.5   # real decay will be high
+        threshold=0.5
     )
 
     # ── Scenario 3: evidence fresh, but tool risk high → require approval ──
