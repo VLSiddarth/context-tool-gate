@@ -1,4 +1,4 @@
-"""demo_ops.py – extended demo with closed‑loop recovery simulation and outcome taxonomy."""
+"""demo_ops.py – extended demo with next_owner field."""
 
 import asyncio
 from dotenv import load_dotenv
@@ -7,12 +7,7 @@ load_dotenv()
 from gates.gate1_freshness import evaluate_freshness
 from gates.gate2_evidence import validate_evidence
 from gates.gate3_policy import evaluate_policy
-from gates.ops_queue import (
-    route_action,
-    simulate_recovery,
-    escalate_and_resolve,
-    determine_final_outcome,
-)
+from gates.ops_queue import route_action, determine_final_outcome
 
 try:
     from rich.console import Console
@@ -131,14 +126,13 @@ def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
     audit.add_row("6. Expected Action", action_str)
     console.print(audit)
 
-    # Closed-loop recovery simulation
+    # Closed‑loop recovery with next_owner
     if simulate_recovery_attempt and final_decision != "AUTO":
-        print_header("Ops Queue — Closed‑Loop Recovery Simulation")
+        print_header("Ops Queue — Closed‑Loop Recovery + Next Owner")
         routing = route_action(expected_action)
         console.print(f"📬 Routing: [bold]{routing['routing_target']}[/] (owner: {routing['owner']})")
 
-        # Use the full outcome taxonomy determination
-        final_outcome = determine_final_outcome(
+        outcome, next_owner = determine_final_outcome(
             gate_allowed=gate2["allowed"],
             expected_action=expected_action,
             evidence_id=evidence_id,
@@ -150,17 +144,13 @@ def run_scenario(name, messages, tool_name, tool_extra=None, threshold=None,
             "escalated_breached_sla": "[red]ESCALATED — BREACHED SLA[/red]",
             "false_positive": "[dim]FALSE POSITIVE / NO ACTION NEEDED[/dim]",
             "recovery_failed_manual": "[red]RECOVERY FAILED — MANUAL INTERVENTION REQUIRED[/red]",
-        }.get(final_outcome, f"UNKNOWN: {final_outcome}")
+        }.get(outcome, f"UNKNOWN: {outcome}")
 
-        console.print(Panel(f"Final Outcome: {outcome_display}", border_style="bold"))
-
-        # If you want to show the individual steps that led to the outcome, you can still print them:
-        # (optional – you can uncomment to see the detailed simulation steps)
-        # recovery_result = simulate_recovery(expected_action["type"], evidence_id)
-        # print(recovery_result)
-        # if recovery_result["status"] == "recovery_failed":
-        #     escalation_result = escalate_and_resolve(expected_action["type"], expected_action["owner"], evidence_id, routing["timeout_minutes"])
-        #     print(escalation_result)
+        console.print(Panel(
+            f"Final Outcome: {outcome_display}\n"
+            f"[bold]Next Owner:[/bold] {next_owner}",
+            border_style="bold"
+        ))
 
     console.print(Panel(
         f"Final result: {final_decision}\n{final_reason}",
@@ -172,13 +162,12 @@ def main():
     if hasattr(console, 'print'):
         console.print(Panel(
             "[bold blue]context-tool-gate[/bold blue] – Three‑Gate LLM Safety Demo\n"
-            "Freshness → Evidence → Policy + Closed‑Loop Recovery + Outcome Taxonomy",
+            "Freshness → Evidence → Policy + Closed‑Loop Recovery + Next Owner",
             border_style="blue"
         ))
 
-    # Force a stale scenario with low threshold to always trigger recovery path
     run_scenario(
-        "Stale Evidence – Closed‑Loop Recovery with Outcome Taxonomy",
+        "Stale Evidence – Closed‑Loop Recovery with Next Owner",
         messages=[
             {"role": "system", "content": "You are a helpful assistant."},
             {"role": "user", "content": "Deploy hotfix. "
@@ -186,7 +175,7 @@ def main():
         ],
         tool_name="deploy_service",
         tool_extra={"service_name": "api", "version": "1.0", "environment": "prod"},
-        threshold=0.01,   # guaranteed drop
+        threshold=0.01,
         simulate_recovery_attempt=True
     )
 

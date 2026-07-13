@@ -1,19 +1,17 @@
-"""Ops Queue Simulator — routes expected_action, simulates recovery,
-   escalates, and returns a structured outcome taxonomy.
+"""Ops Queue Simulator — routes, recovers, escalates, and assigns next owner.
 
-Outcome taxonomy (Matt Bell's 5 states):
-- recovered_auto             : automatic recovery succeeded
-- escalated_resolved_sla     : escalated and resolved within SLA
-- escalated_breached_sla     : escalated but resolution breached SLA
-- false_positive             : block was unnecessary / no action needed
-- recovery_failed_manual     : recovery action failed and required manual intervention
+Outcome taxonomy (Matt Bell's 5 states) + next_owner mapping:
+- recovered_auto             → next_owner: agent (resume)
+- escalated_resolved_sla     → next_owner: ops_team (close ticket)
+- escalated_breached_sla     → next_owner: manager (review SLA breach)
+- false_positive             → next_owner: data_science (tune thresholds)
+- recovery_failed_manual     → next_owner: on_call_engineer (manual fix)
 """
 
 import time
 import random
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
-# Routing table: owner → target queue
 ROUTING_MAP = {
     "data_pipeline": "jira:data_eng",
     "ops_team": "pagerduty:ops_squad",
@@ -23,7 +21,6 @@ ROUTING_MAP = {
     "tool_owner": "jira:tools",
 }
 
-# Recovery simulation config
 RECOVERY_CONFIG = {
     "refresh_context": {"simulate": True, "success_rate": 0.6},
     "fix_tool_payload": {"simulate": True, "success_rate": 0.9},
@@ -33,14 +30,21 @@ RECOVERY_CONFIG = {
     "execute": {"simulate": True, "success_rate": 1.0},
 }
 
-# SLA timeouts in minutes (default if not parsed)
+# Next owner assignment per outcome
+NEXT_OWNER_MAP = {
+    "recovered_auto": "agent",
+    "escalated_resolved_sla": "ops_team",
+    "escalated_breached_sla": "manager",
+    "false_positive": "data_science",
+    "recovery_failed_manual": "on_call_engineer",
+}
+
 DEFAULT_SLA_MINUTES = 30
 
 
 def parse_timeout_minutes(timeout_str: str) -> int:
-    """Convert a timeout string like '15m' or 'immediate' to minutes."""
     if not timeout_str or timeout_str == "immediate":
-        return 1  # immediate is treated as 1 minute
+        return 1
     timeout_str = timeout_str.lower().replace(" ", "")
     if timeout_str.endswith("m"):
         try:
@@ -56,7 +60,6 @@ def parse_timeout_minutes(timeout_str: str) -> int:
 
 
 def route_action(expected_action: Dict[str, str]) -> Dict[str, Any]:
-    """Determine the routing target for an expected action."""
     owner = expected_action.get("owner", "unknown")
     target = ROUTING_MAP.get(owner, "unknown_queue")
     return {
@@ -69,7 +72,6 @@ def route_action(expected_action: Dict[str, str]) -> Dict[str, Any]:
 
 
 def simulate_recovery(action_type: str, evidence_id: str) -> Dict[str, Any]:
-    """Simulate an automated recovery attempt."""
     config = RECOVERY_CONFIG.get(action_type, {})
     if not config.get("simulate", False):
         return {
@@ -78,7 +80,6 @@ def simulate_recovery(action_type: str, evidence_id: str) -> Dict[str, Any]:
             "evidence_id": evidence_id,
             "timestamp": time.time(),
         }
-
     success = random.random() < config.get("success_rate", 0.5)
     if success:
         return {
@@ -97,11 +98,8 @@ def simulate_recovery(action_type: str, evidence_id: str) -> Dict[str, Any]:
 
 
 def escalate_and_resolve(action_type: str, owner: str, evidence_id: str, timeout_minutes: int) -> Dict[str, Any]:
-    """Simulate escalation and resolution within/outside SLA."""
-    # Simulate time taken to resolve after escalation (random)
-    resolution_time = random.randint(5, 120)  # minutes
+    resolution_time = random.randint(5, 120)
     resolved_within_sla = resolution_time <= timeout_minutes
-
     return {
         "status": "escalated",
         "action_type": action_type,
@@ -119,36 +117,35 @@ def determine_final_outcome(
     gate_allowed: bool,
     expected_action: Dict[str, str],
     evidence_id: str,
-    manual_review_false_positive: bool = False,
-) -> str:
+) -> tuple[str, str]:
     """
-    Determine the final recovery outcome taxonomy after a gate decision.
-    This runs the full simulation of routing, recovery, escalation, and resolution.
-    Returns one of the five taxonomy states.
+    Simulate the entire recovery flow and return (outcome_label, next_owner).
     """
     action_type = expected_action["type"]
 
-    # If the gate allowed, it's a normal execution (not a block). But we're only called
-    # when a block/approval decision has been made, so this path is for non-auto cases.
-    # Auto-runs (execute) would be success, but we map them to 'recovered_auto' if needed.
     if gate_allowed and action_type == "execute":
-        return "recovered_auto"
+        return "recovered_auto", NEXT_OWNER_MAP["recovered_auto"]
 
-    # Simulate possible false positive (random 10% chance if evidence was actually fresh but blocked)
+    # Simulate possible false positive (10%)
     if random.random() < 0.1:
-        return "false_positive"
+        return "false_positive", NEXT_OWNER_MAP["false_positive"]
 
-    # Try automatic recovery
     recovery_result = simulate_recovery(action_type, evidence_id)
     if recovery_result["status"] == "recovered":
-        return "recovered_auto"
+        return "recovered_auto", NEXT_OWNER_MAP["recovered_auto"]
 
-    # Recovery failed → escalate
+    # Recovery failed – escalate
     routing = route_action(expected_action)
     sla_minutes = routing["timeout_minutes"]
-    escalation_result = escalate_and_resolve(action_type, expected_action["owner"], evidence_id, sla_minutes)
+    escalation_result = escalate_and_resolve(
+        action_type, expected_action["owner"], evidence_id, sla_minutes
+    )
 
     if escalation_result["resolved_within_sla"]:
-        return "escalated_resolved_sla"
+        return "escalated_resolved_sla", NEXT_OWNER_MAP["escalated_resolved_sla"]
     else:
-        return "escalated_breached_sla"
+        # If escalation also breached, it's manual intervention scenario
+        # But we already distinguish; escalated_breached_sla is the label.
+        # recovery_failed_manual would be if manual step fails, but we can treat
+        # escalated_breached_sla as needing manual review by manager.
+        return "escalated_breached_sla", NEXT_OWNER_MAP["escalated_breached_sla"]
